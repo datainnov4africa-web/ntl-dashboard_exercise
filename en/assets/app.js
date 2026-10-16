@@ -5,7 +5,7 @@
 const S = { iso: null, d: {}, rendered: {}, map: null, mapB: null, mapMode: "choro" };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const PAGES = ["overview", "map", "time", "regions", "shocks", "inequality", "method", "data"];
+const PAGES = ["overview", "map", "time", "regions", "shocks", "inequality", "industry", "method", "data"];
 
 /* ---------------------------------------------------------------- formatting (en-US) */
 const nf = (d = 0) => new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -57,7 +57,7 @@ async function loadCountry(iso) {
     regions: getCSV(base + "regions.csv"), annual: getCSV(base + "annual_units.csv"),
     monthly: getCSV(base + "monthly_national.csv"), madm1: getCSV(base + "monthly_adm1.csv"),
     gdp: getJSON(base + "gdp.json"), shocks: getJSON(base + "shocks.json"), ineq: getJSON(base + "inequality.json"),
-    growth: getJSON(base + "growth.json"),
+    growth: getJSON(base + "growth.json"), ind: getJSON(base + "industrial.geojson"), indmeta: getJSON(base + "industrial.json"),
     adm0: getJSON(base + "adm0.geojson"), adm1: getJSON(base + "adm1.geojson"), adm2: getJSON(base + "adm2.geojson"),
   };
   const keys = Object.keys(want);
@@ -124,6 +124,7 @@ function route() {
     S.rendered[p] = true;
   }
   if (p === "map" && S.map) setTimeout(() => S.map.invalidateSize(), 50);
+  if (p === "industry" && S.imap) setTimeout(() => S.imap.invalidateSize(), 50);
   window.dispatchEvent(new Event("resize"));
 }
 
@@ -422,6 +423,7 @@ const FILE_DESC = {
   "gdp.json": "Elasticities, diagnostics, GDP estimates", "shocks.json": "Events, impacts, structural breaks, daily series",
   "inequality.json": "Gini, Theil, Lorenz, populations in the dark", "growth.json": "Concentration and convergence", "summary.json": "Key indicators and messages",
   "meta.json": "Metadata, parameters, versions",
+  "industrial.geojson": "Candidate industrial zones (outlines + indicators)", "industrial.json": "Industrial zones: summary, parameters, OSM validation",
 };
 RENDER.data = () => {
   const m = S.d.meta;
@@ -443,9 +445,18 @@ const SEQ_B = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95",
 const SEQ_O = ["#fde3d6", "#f9bfa4", "#f39a72", "#eb6834", "#c94f20", "#9f3c17", "#73290e"];
 const DIV = ["#e34948", "#ef8f8a", "#f6c6c2", "#d9d8d2", "#b7d3f6", "#6da7ec", "#2a78d6"];
 
-// Map: Leaflet (no WebGL needed, works on every browser), CARTO raster basemap, PNG overlays in Web Mercator.
-const TILES = { light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" };
-const TILE_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · © <a href="https://carto.com/attributions">CARTO</a>';
+// Map: Leaflet (no WebGL needed). Basemaps WITHOUT any API key: Esri grey canvas (default), NASA Black
+// Marble (GIBS), OpenStreetMap; automatic fallback to the next one if tiles fail; PNG overlays in Web Mercator.
+const BASES = {
+  esri: { light: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+          dark: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+          attr: 'Tiles © <a href="https://www.esri.com">Esri</a> — Esri, HERE, Garmin, © OpenStreetMap contributors', maxNativeZoom: 16 },
+  night: { url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+           attr: 'NASA Black Marble 2016 · <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>', maxNativeZoom: 8 },
+  osm: { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attr: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxNativeZoom: 19 },
+  none: null,
+};
+const BASE_ORDER = ["esri", "osm", "night", "none"];
 const effTheme = () => document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 const rasterUrl = (f) => `data/${S.iso}/rasters/${f}`;
 function quantiles(vals, k = 7) {
@@ -461,7 +472,7 @@ function mapBounds() {
 function newMap(id) {
   const mp = L.map(id, { zoomSnap: 0.25, worldCopyJump: false });
   mp.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
-  mp._base = L.tileLayer(TILES[effTheme()], { attribution: TILE_ATTR, subdomains: "abcd", maxZoom: 19 }).addTo(mp);
+  setBase(mp); if (id === "map") addBaseControl(mp);
   mp.createPane("raster"); mp.getPane("raster").style.zIndex = 350;
   L.control.scale({ imperial: false }).addTo(mp);
   mp.fitBounds(mapBounds(), { padding: [16, 16] });
@@ -474,7 +485,7 @@ function overlay(f) {
 }
 const outline = (gj) => L.geoJSON(gj, { interactive: false, style: { color: "rgba(255,255,255,0.8)", weight: 1, fill: false } });
 function showLayer(mp, lyr, on) { if (!mp || !lyr) return; if (on && !mp.hasLayer(lyr)) lyr.addTo(mp); if (!on && mp.hasLayer(lyr)) mp.removeLayer(lyr); }
-function mapFail(msg) { const fb = $("#map-fallback"); fb.textContent = msg; fb.hidden = false; }
+function mapFail(msg) { const fb = $("#map-fallback"); fb.textContent = msg || TXT.fail; fb.hidden = false; fb.style.display = "grid"; }
 
 RENDER.map = async () => {
   const m = S.d.meta;
@@ -494,7 +505,7 @@ RENDER.map = async () => {
       const gj = S.d[lv.toLowerCase()]; if (!gj) continue;
       S.lyr[lv] = L.geoJSON(gj, { style: () => ({ color: "rgba(255,255,255,0.8)", weight: lv === "ADM1" ? 1 : 0.5, fillOpacity: 0.82, fillColor: "#ccc" }),
         onEachFeature: (f, l) => {
-          l.bindTooltip(esc(f.properties.name || ""), { sticky: true, direction: "top", opacity: 0.95 });
+          l.bindTooltip(() => tipHtml(f.properties), { sticky: true, direction: "top", opacity: 1 });
           l.on({ mouseover: (e) => { e.target.setStyle({ weight: 2.5, color: css("--ink") }); e.target.bringToFront(); },
                  mouseout: (e) => S.lyr[lv].resetStyle(e.target), click: (e) => popup(f.properties, lv, e.latlng) });
         } });
@@ -502,6 +513,7 @@ RENDER.map = async () => {
     S.lyr.outline = S.d.adm1 ? outline(S.d.adm1) : null;
     S.lyr.ntl = overlay(years.length ? m.rasters.ntl[years[years.length - 1]] : null);
     S.lyr.dark = overlay(Object.values((m.rasters && m.rasters.dark) || {})[0]);
+    preloadRasters(years); addMapControls(S.map);
     S.mapReady = true;
     setTimeout(() => { S.map.invalidateSize(); S.map.fitBounds(mapBounds(), { padding: [16, 16] }); }, 80);
     applyMapMode();
@@ -510,10 +522,12 @@ RENDER.map = async () => {
   lvSel.onchange = () => { fillInd(); applyMapMode(); };
   indSel.onchange = applyMapMode;
   yr.oninput = () => applyMapMode();
+  setupPlay();
   if (ca && cb) { ca.onchange = cb.onchange = () => applyMapMode(); }
 };
 
-function applyMapMode() {
+function applyMapMode() { applyMapMode0(); afterMapMode(); }
+function applyMapMode0() {
   if (!S.map || !S.mapReady) return;
   const mode = S.mapMode, m = S.d.meta, lv = $("#map-level").value;
   S.map.closePopup();
@@ -524,7 +538,7 @@ function applyMapMode() {
   showLayer(S.map, S.lyr.ntl, mode === "ntl" || mode === "compare");
   showLayer(S.map, S.lyr.dark, mode === "dark");
   const legend = $("#map-legend"), help = $("#map-help"), src = $("#map-source");
-  src.textContent = "Sources: VIIRS VNL V2 (NOAA/EOG) via Google Earth Engine; boundaries {b}; basemap © OpenStreetMap, © CARTO.".replace("{b}", (m.boundaries || {}).ADM1 || "geoBoundaries");
+  src.textContent = "Sources: VIIRS VNL V2 (NOAA/EOG) via Google Earth Engine; boundaries {b}; basemap Esri, NASA Black Marble or © OpenStreetMap (no API key).".replace("{b}", (m.boundaries || {}).ADM1 || "geoBoundaries");
   if (mode === "choro") {
     const ind = INDICATORS.find((i) => i.k === $("#map-indicator").value) || INDICATORS[0];
     const feats = (S.d[lv.toLowerCase()] || {}).features || [];
@@ -550,14 +564,14 @@ function applyMapMode() {
     help.textContent = ind.help + " Hover or click a unit for details.";
     teardownCompare();
   } else if (mode === "ntl" || mode === "compare") {
-    const y = mode === "compare" ? ($("#cmp-b") ? $("#cmp-b").value : years[years.length - 1]) : years[+$("#map-year").value];
+    const y = mode === "compare" ? ($("#cmp-a") ? $("#cmp-a").value : years[0]) : years[+$("#map-year").value];
     $("#year-label").textContent = mode === "ntl" ? (y || "") : "";
     if (S.lyr.ntl && y) S.lyr.ntl.setUrl(rasterUrl(m.rasters.ntl[y]));
     legend.innerHTML = `<strong>Radiance (log scale)</strong><div class="ramp" style="background:linear-gradient(90deg,#000004,#3b0f70,#8c2981,#de4968,#fe9f6d,#fcfdbf)"></div><div class="ticks"><span>0.1</span><span>1</span><span>10</span><span>100 nW</span></div>`;
     if (mode === "compare") {
-      const a = $("#cmp-a") ? $("#cmp-a").value : years[0];
-      help.textContent = "Synchronised maps: {a} on the left, {b} on the right (change the years in the toolbar). Newly lit areas reflect electrification, urbanisation or new infrastructure.".replace("{a}", a).replace("{b}", y);
-      setupCompare(a);
+      const a = $("#cmp-a") ? $("#cmp-a").value : years[0], yB = $("#cmp-b") ? $("#cmp-b").value : years[years.length - 1];
+      help.textContent = "Synchronised maps: {a} on the left, {b} on the right (change the years in the toolbar). Newly lit areas reflect electrification, urbanisation or new infrastructure.".replace("{a}", a).replace("{b}", yB);
+      setupCompare(yB);
     } else { help.textContent = "VNL V2 annual composite (gas flares masked). Move the slider to browse the years."; teardownCompare(); }
   } else if (mode === "dark") {
     legend.innerHTML = `<strong>Inhabited areas (${(m.rasters && Object.keys(m.rasters.dark || {})[0]) || ""})</strong><div><span class="sw" style="background:#f5c242"></span>lit</div><div><span class="sw" style="background:#d7263d"></span>unlit (“in the dark”)</div>`;
@@ -588,8 +602,8 @@ function teardownCompare() {
 function popup(p, lv, latlng) {
   const rows = [["Sum of lights", F.num(p.sol)], ["National share", F.share(p.share_last, 1)], ["Growth", F.pct(p.growth) + "/yr"], ["Class", p.class || "–"], ["Light per capita", F.num(p.sol_pc, 3)], ["Pop. in the dark", `${F.people(p.pop_dark)} (${F.share(p.dark_share)})`]];
   if (lv === "ADM1" && isNum(p.gdp_pc_est)) rows.push(["Est. GDP per capita", F.num(p.gdp_pc_est) + " USD"]);
-  L.popup({ maxWidth: 300 }).setLatLng(latlng).setContent(`<strong>${esc(p.name)}</strong>${p.parent_name ? `<div class="why">${esc(p.parent_name)}</div>` : ""}` +
-    `<table>${rows.map(([a, b]) => `<tr><td style="color:var(--ink-2);padding-right:8px">${a}</td><td>${b}</td></tr>`).join("")}</table>`).openOn(S.map);
+  L.popup({ maxWidth: 320, minWidth: 260 }).setLatLng(latlng).setContent(`<strong>${esc(p.name)}</strong>${p.parent_name ? `<div class="why">${esc(p.parent_name)}</div>` : ""}` +
+    sparkline(p.unit_id) + `<table>${rows.map(([a, b]) => `<tr><td style="color:var(--ink-2);padding-right:8px">${a}</td><td>${b}</td></tr>`).join("")}</table>`).openOn(S.map);
 }
 
 /* ================================================================ theme & boot */
@@ -600,7 +614,7 @@ function toggleTheme() {
 function rethemed() {
   const cur = (location.hash || "#overview").slice(1);
   S.rendered = { map: S.rendered.map }; route();   // the map is re-themed in place, never rebuilt
-  for (const mp of [S.map, S.mapB]) if (mp && mp._base) mp._base.setUrl(TILES[effTheme()]);
+  for (const mp of [S.map, S.mapB, S.imap]) if (mp) setBase(mp);
   if (cur === "map") applyMapMode();
 }
 
@@ -619,7 +633,7 @@ async function boot() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (!document.documentElement.dataset.theme) rethemed(); });
   let countries = [];
   try { countries = await getJSON("data/countries.json"); } catch (e) { /* handled below */ }
-  if (!countries.length) { $("#country-title").textContent = "No data published"; $("#lede").textContent = "Run section 11 of the notebook to export the data."; return; }
+  if (!countries.length) { $("#country-title").textContent = "No data published"; $("#lede").textContent = "Run section 12 of the notebook to export the data."; return; }
   const want = (new URLSearchParams(location.search).get("country") || (new URLSearchParams(location.search).get("country") || new URLSearchParams(location.search).get("pays"))) || store.get("ntl-country");
   const iso = (countries.find((c) => c.iso3 === want) || countries[0]).iso3;
   const sel = $("#country-select");
@@ -634,4 +648,304 @@ async function boot() {
   window.addEventListener("hashchange", route);
   route();
 }
+/* ================================================================ map ergonomics (v2) */
+const TXT = { play: "Play the animation", pause: "Pause", reset: "Re-centre on the country", full: "Full screen",
+    trend: "Sum of lights {a}–{b}", fail: "The map could not be loaded. Reload the page (Ctrl+F5)." };
+function preloadRasters(years) {
+  const R = S.d.meta.rasters || {};
+  years.forEach((y) => { const im = new Image(); im.src = rasterUrl(R.ntl[y]); });
+}
+function addMapControls(mp) {
+  const Ctl = L.Control.extend({
+    options: { position: "topleft" },
+    onAdd() {
+      const box = L.DomUtil.create("div", "leaflet-bar ntl-ctl");
+      box.innerHTML = `<a href="#" role="button" data-act="reset" title="${TXT.reset}" aria-label="${TXT.reset}">` +
+        `<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 3h-2.07A7 7 0 0 0 13 5.07V3h-2v2.07A7 7 0 0 0 5.07 11H3v2h2.07A7 7 0 0 0 11 18.93V21h2v-2.07A7 7 0 0 0 18.93 13H21v-2zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/></svg></a>` +
+        `<a href="#" role="button" data-act="full" title="${TXT.full}" aria-label="${TXT.full}">` +
+        `<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z"/></svg></a>`;
+      L.DomEvent.disableClickPropagation(box);
+      box.addEventListener("click", (e) => {
+        const a = e.target.closest("a"); if (!a) return; e.preventDefault();
+        if (a.dataset.act === "reset") mp.fitBounds(mapBounds(), { padding: [16, 16] }); else toggleFull();
+      });
+      return box;
+    },
+  });
+  new Ctl().addTo(mp);
+}
+function refreshMaps() { setTimeout(() => { if (S.map) S.map.invalidateSize(); if (S.mapB) S.mapB.invalidateSize(); }, 220); }
+function toggleFull() {
+  const card = $(".map-card");
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  if (card.classList.contains("fs")) { card.classList.remove("fs"); refreshMaps(); return; }
+  if (card.requestFullscreen) card.requestFullscreen().catch(() => { card.classList.add("fs"); refreshMaps(); });
+  else { card.classList.add("fs"); refreshMaps(); }
+}
+document.addEventListener("fullscreenchange", refreshMaps);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $(".map-card.fs")) { $(".map-card").classList.remove("fs"); refreshMaps(); } });
+
+function setupPlay() {
+  const btn = $("#map-play"), yr = $("#map-year"); if (!btn || !yr) return;
+  const label = (t) => { btn.title = t; btn.setAttribute("aria-label", t); };
+  const stop = () => { clearInterval(S.play); S.play = null; btn.textContent = "▶"; btn.classList.remove("on"); label(TXT.play); };
+  S.stopPlay = stop;
+  btn.onclick = () => {
+    if (S.play) { stop(); return; }
+    if (+yr.value >= +yr.max) { yr.value = 0; applyMapMode(); }
+    btn.textContent = "❚❚"; btn.classList.add("on"); label(TXT.pause);
+    S.play = setInterval(() => { if (+yr.value >= +yr.max) { stop(); return; } yr.value = +yr.value + 1; applyMapMode(); }, 1200);
+  };
+  yr.addEventListener("pointerdown", () => { if (S.play) stop(); });
+  yr.addEventListener("keydown", () => { if (S.play) stop(); });
+}
+
+function afterMapMode() {
+  const mode = S.mapMode, m = S.d.meta, years = Object.keys((m.rasters && m.rasters.ntl) || {}).sort();
+  if (mode !== "ntl" && S.play && S.stopPlay) S.stopPlay();
+  const a = $("#map-year-badge"), b = $("#map-year-badge-b"); if (!a || !b) return;
+  let ya = "", yb = "";
+  if (mode === "ntl") ya = years[+$("#map-year").value] || "";
+  else if (mode === "compare") { ya = $("#cmp-a").value; yb = $("#cmp-b").value; }
+  else if (mode === "dark") ya = Object.keys((m.rasters && m.rasters.dark) || {})[0] || "";
+  a.textContent = ya; a.hidden = !ya; b.textContent = yb; b.hidden = !yb;
+}
+
+function tipHtml(p) {
+  let s = `<strong>${esc(p.name || "")}</strong>`;
+  if (p.parent_name) s += ` <span class="tip-p">${esc(p.parent_name)}</span>`;
+  if (S.mapMode === "choro") {
+    const ind = INDICATORS.find((i) => i.k === $("#map-indicator").value);
+    if (ind) { const v = p[ind.k]; s += `<div class="tip-v">${esc(ind.t)} : <b>${ind.kind === "cat" ? esc(v ?? "–") : ind.fmt(v)}</b></div>`; }
+  }
+  return s;
+}
+
+function sparkline(uid) {
+  const rows = (S.d.annual || []).filter((r) => r.unit_id === uid && isNum(r.sol)).sort((a, b) => a.year - b.year);
+  if (rows.length < 3) return "";
+  const W = 250, H = 58, P = 5, xs = rows.map((r) => r.year), ys = rows.map((r) => r.sol);
+  const x0 = xs[0], x1 = xs[xs.length - 1], lo = Math.min(...ys), hi = Math.max(...ys), span = hi - lo || 1;
+  const X = (x) => P + ((x - x0) / (x1 - x0 || 1)) * (W - 2 * P), Y = (y) => H - P - ((y - lo) / span) * (H - 2 * P);
+  const pts = rows.map((r) => `${X(r.year).toFixed(1)},${Y(r.sol).toFixed(1)}`);
+  const area = `M${X(x0).toFixed(1)},${H - P} L${pts.join(" L")} L${X(x1).toFixed(1)},${H - P} Z`;
+  const ch = ys[0] > 0 ? ys[ys.length - 1] / ys[0] - 1 : null;
+  return `<div class="spark"><div class="spark-t">${esc(TXT.trend.replace("{a}", x0).replace("{b}", x1))}` +
+    `${isNum(ch) ? ` <b class="${ch >= 0 ? "up" : "down"}">${F.pct(ch, 0)}</b>` : ""}</div>` +
+    `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true"><path d="${area}" class="sp-a"/>` +
+    `<polyline points="${pts.join(" ")}" class="sp-l"/><circle cx="${X(x1).toFixed(1)}" cy="${Y(ys[ys.length - 1]).toFixed(1)}" r="3.2" class="sp-d"/></svg></div>`;
+}
+
+/* ================================================================ basemaps (no API key) */
+const BASE_TXT = { label: "Basemap", esri: "Grey (Esri)", night: "Night (NASA Black Marble)", osm: "OpenStreetMap", none: "None" };
+function baseKind(mp) { return mp._baseKind || store.get("ntl-base") || "esri"; }
+function setBase(mp, kind) {
+  if (!mp) return;
+  kind = kind || baseKind(mp);
+  if (mp._base) { mp.removeLayer(mp._base); mp._base = null; }
+  mp._baseKind = kind;
+  const cfg = BASES[kind];
+  const sel = mp._baseSel; if (sel) sel.value = kind;
+  if (!cfg) return;
+  const dark = mp._forceDark || effTheme() === "dark";
+  const url = cfg.url || (dark ? cfg.dark : cfg.light);
+  const lyr = L.tileLayer(url, { attribution: cfg.attr, maxNativeZoom: cfg.maxNativeZoom, maxZoom: 19, crossOrigin: false });
+  let ok = 0, bad = 0;
+  lyr.on("tileload", () => { ok++; });
+  lyr.on("tileerror", () => {
+    bad++;
+    if (!ok && bad >= 4 && mp._base === lyr) {         // this provider is unreachable here: next one
+      const nxt = BASE_ORDER[BASE_ORDER.indexOf(kind) + 1] || "none";
+      console.warn("basemap", kind, "unavailable, switching to", nxt);
+      setBase(mp, nxt);
+    }
+  });
+  mp._base = lyr.addTo(mp); lyr.bringToBack();
+}
+function addBaseControl(mp) {
+  const Ctl = L.Control.extend({
+    options: { position: "bottomright" },
+    onAdd() {
+      const box = L.DomUtil.create("div", "base-ctl");
+      box.innerHTML = `<label><span>${BASE_TXT.label}</span><select aria-label="${BASE_TXT.label}">` +
+        Object.keys(BASES).map((k) => `<option value="${k}">${BASE_TXT[k]}</option>`).join("") + `</select></label>`;
+      L.DomEvent.disableClickPropagation(box); L.DomEvent.disableScrollPropagation(box);
+      const sel = box.querySelector("select"); mp._baseSel = sel; sel.value = baseKind(mp);
+      sel.onchange = () => { store.set("ntl-base", sel.value); for (const m of [S.map, S.mapB, S.imap]) if (m) setBase(m, sel.value); };
+      return box;
+    },
+  });
+  new Ctl().addTo(mp);
+}
+
+/* ================================================================ industrial zones */
+const IT = {
+  lede: "Where are the industrial zones of {c}? Industrial sites shine at night like towns, but their buildings are mostly non-residential, few people live there and they emit nitrogen dioxide. Combining these signals, {n} candidate zones are detected.",
+  none: "Industrial zones have not been computed for this country yet: run section 10 of the notebook, then publish again.",
+  k_n: "Zones detected", k_n_sub: "{a} major hubs · {b} energy sites",
+  k_share: "Share of national light", k_share_sub: "emitted by the zones, {y}",
+  k_area: "Total area", k_area_sub: "km² of candidate zones",
+  k_growth: "Growth of light in the zones", k_growth_sub: "%/yr, {a}–{b} (Theil–Sen)",
+  k_val: "Confirmed by OpenStreetMap", k_val_sub: "of zones contain an OSM industrial area (± 1 km)",
+  k_val_na: "OSM validation not available",
+  cls: { major: "Major industrial hub", zone: "Industrial or logistics zone", energy: "Energy / extraction site" },
+  dyn: { up: "expanding", flat: "stable", down: "declining", na: "n/a" },
+  legend: "Zone type", size: "size ∝ light emitted",
+  cols: ["Rank", "Zone", "Type", "Area (km²)", "Light", "National share", "Growth %/yr", "Non-resid. built", "Residents/km²", "OSM"],
+  p_area: "Area", p_sol: "Light emitted", p_share: "National share", p_growth: "Growth", p_dyn: "Dynamics",
+  p_nres: "Non-residential built-up", p_popd: "Residents/km²", p_no2: "NO₂ index", p_score: "Industrial score", p_osm: "OSM industrial areas",
+  trend: "Light emitted {a}–{b}", x_scatter: "Non-residential share of built-up (%)", y_scatter: "Light per resident (log scale)",
+  x_top: "Share of national light (%)",
+  method: `<p><strong>Principle.</strong> A VIIRS pixel (~460 m) is a candidate when it is bright (≥ {r} nW) and its
+    <em>industrial score</em> exceeds {t}. The score combines four signals normalised to 0–1:</p>
+    <table><tr><th>Signal</th><th>Data</th><th>Weight</th></tr>
+    <tr><td>Light intensity</td><td>VIIRS VNL V2, median of the last 3 years</td><td>{w1}</td></tr>
+    <tr><td>Non-residential buildings</td><td>GHSL BUILT-S (epoch {ep}), non-residential share</td><td>{w2}</td></tr>
+    <tr><td>Few residents</td><td>GHSL GHS-POP</td><td>{w3}</td></tr>
+    <tr><td>NO₂ emissions</td><td>Sentinel-5P TROPOMI ({no2})</td><td>{w4}</td></tr></table>
+    <p>Gas flares detected by the notebook form the <em>energy / extraction</em> class. Neighbouring pixels are grouped
+    into zones; a zone is a <em>major hub</em> when it is among the brightest 10 % or larger than 8 km².</p>
+    <p><strong>Validation.</strong> {val}</p>
+    <p><strong>Limitations.</strong> "Non-residential" buildings also include retail, ports, airports and public
+    facilities; NO₂ is measured at ~5 km and also follows traffic; a zone is a <em>candidate</em> to be checked against
+    national registers of industrial estates and high-resolution imagery.</p>`,
+  val_ok: "{p} of detected zones (and {pt} of the 30 brightest) contain at least one OpenStreetMap <code>landuse=industrial</code> area within 1 km; these zones carry {pw} of the detected light. {rc} of the country's {n} OSM industrial areas are covered.",
+  val_na: "The OpenStreetMap comparison could not be made (Overpass API unavailable at computation time).",
+};
+const ICOL = { major: "#F5C242", zone: "#F28C28", energy: "#E4572E" };
+const fmtT = (s, o) => String(s).replace(/\{(\w+)\}/g, (_, k) => (o[k] ?? ""));
+function indYears(p) { return Object.keys(p).filter((k) => /^sol_\d{4}$/.test(k)).map((k) => +k.slice(4)).sort(); }
+function indSpark(p) {
+  const yrs = indYears(p); const ys = yrs.map((y) => p["sol_" + y]);
+  if (yrs.length < 3 || !ys.every(isNum)) return "";
+  const W = 250, H = 58, P = 5, lo = Math.min(...ys), hi = Math.max(...ys), sp = hi - lo || 1;
+  const X = (i) => P + (i / (yrs.length - 1)) * (W - 2 * P), Y = (v) => H - P - ((v - lo) / sp) * (H - 2 * P);
+  const pts = ys.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
+  const ch = ys[0] > 0 ? ys[ys.length - 1] / ys[0] - 1 : null;
+  return `<div class="spark"><div class="spark-t">${esc(fmtT(IT.trend, { a: yrs[0], b: yrs[yrs.length - 1] }))}` +
+    `${isNum(ch) ? ` <b class="${ch >= 0 ? "up" : "down"}">${F.pct(ch, 0)}</b>` : ""}</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">` +
+    `<path class="sp-a" d="M${X(0)},${H - P} L${pts.join(" L")} L${X(yrs.length - 1)},${H - P} Z"/><polyline class="sp-l" points="${pts.join(" ")}"/>` +
+    `<circle class="sp-d" r="3.2" cx="${X(yrs.length - 1)}" cy="${Y(ys[ys.length - 1])}"/></svg></div>`;
+}
+function indPopup(p) {
+  const rows = [[IT.p_area, F.num(p.area_km2, 1) + " km²"], [IT.p_sol, F.num(p.sol)], [IT.p_share, F.share(p.share_national, 1)],
+    [IT.p_growth, F.pct(p.growth) + "/an".replace("/an", document.documentElement.lang === "en" ? "/yr" : "/an")],
+    [IT.p_dyn, IT.dyn[p.dynamics] || "–"], [IT.p_nres, F.share(p.nres_share)], [IT.p_popd, F.num(p.pop_density)],
+    [IT.p_no2, isNum(p.s_no2) ? F.num(100 * p.s_no2) + " / 100" : "–"], [IT.p_score, isNum(p.score) ? F.num(100 * p.score) + " / 100" : "–"],
+    [IT.p_osm, isNum(p.osm_n) ? (p.osm_n > 0 ? "✔ " + p.osm_n : "–") : "–"]];
+  return `<div class="ind-pop"><span class="ind-badge" style="background:${ICOL[p.class]}">${esc(IT.cls[p.class] || "")}</span>` +
+    `<strong>${esc(p.name)}</strong><div class="why">${esc(p.zone_id)} · ${F.num(Math.abs(p.lat), 3)}° ${p.lat >= 0 ? "N" : "S"} · ${F.num(Math.abs(p.lon), 3)}° ${p.lon >= 0 ? "E" : (document.documentElement.lang === "en" ? "W" : "O")}</div>` + indSpark(p) +
+    `<table>${rows.map(([a, b]) => `<tr><td style="color:var(--ink-2);padding-right:10px">${a}</td><td>${b}</td></tr>`).join("")}</table></div>`;
+}
+RENDER.industry = () => {
+  const gj = S.d.ind, im = S.d.indmeta, m = S.d.meta;
+  const feats = (gj && gj.features) || [];
+  if (!feats.length) {
+    $("#ind-lede").textContent = IT.none;
+    ["#ind-kpis"].forEach((s) => { $(s).innerHTML = ""; });
+    $$("#page-industry .card, #page-industry .grid").forEach((el) => { el.hidden = true; });
+    return;
+  }
+  const sm = (im && im.summary) || {}, val = im && im.validation, info = (im && im.info) || {};
+  const P = feats.map((f) => f.properties);
+  const yrs = indYears(P[0]);
+  $("#ind-lede").textContent = fmtT(IT.lede, { c: m.name, n: F.num(feats.length) });
+  const k = [
+    [IT.k_n, F.num(sm.n ?? feats.length), fmtT(IT.k_n_sub, { a: sm.n_major ?? "–", b: sm.n_energy ?? "–" })],
+    [IT.k_share, F.share(sm.share_national, 0), fmtT(IT.k_share_sub, { y: yrs[yrs.length - 1] })],
+    [IT.k_area, F.num(sm.area_km2), IT.k_area_sub],
+    [IT.k_growth, F.pct(sm.growth_total), fmtT(IT.k_growth_sub, { a: yrs[0], b: yrs[yrs.length - 1] })],
+    val ? [IT.k_val, F.share(val.precision), IT.k_val_sub] : [IT.k_val, "–", IT.k_val_na],
+  ];
+  $("#ind-kpis").innerHTML = k.map(([l, v, s]) => `<div class="kpi"><div class="label">${esc(l)}</div><div class="value">${v}</div><div class="sub">${esc(s)}</div></div>`).join("");
+  // ---- method text
+  const pr = info.params || {}, w = info.weights || {};
+  const pct0 = (v) => (isNum(v) ? F.share(v) : "–");
+  const valTxt = val ? fmtT(IT.val_ok, { p: pct0(val.precision), pt: pct0(val.precision_top30), pw: pct0(val.light_weighted_precision),
+    rc: pct0(val.recall), n: F.num(val.osm_areas) }) : IT.val_na;
+  $("#ind-method").innerHTML = fmtT(IT.method, { r: pr.min_rad ?? 5, t: F.num(pr.threshold ?? 0.55, 2), w1: pct0(w.light), w2: pct0(w.nres),
+    w3: pct0(w.lowres), w4: pct0(w.no2), ep: info.ghsl_epoch ?? "–", no2: info.no2 ? info.no2.year : "–", val: valTxt });
+  // ---- charts
+  const c = C(), top = P.slice().sort((a, b) => (b.sol || 0) - (a.sol || 0)).slice(0, 15).reverse();
+  plot("ind-top", Object.keys(ICOL).map((cl) => {
+    const v = top.filter((p) => p.class === cl);
+    return { type: "bar", orientation: "h", name: IT.cls[cl], y: v.map((p) => `${p.name} · ${p.zone_id}`), x: v.map((p) => 100 * (p.share_national || 0)),
+      marker: { color: ICOL[cl], line: { color: c.surface, width: 1 } }, customdata: v.map((p) => p.zone_id),
+      hovertemplate: "%{y}<br>%{x:.2f} %<extra>%{fullData.name}</extra>" };
+  }).filter((t) => t.y.length), { yaxis: { categoryorder: "array", categoryarray: top.map((p) => `${p.name} · ${p.zone_id}`), automargin: true },
+    xaxis: { title: { text: IT.x_top } }, barmode: "overlay", margin: { l: 10 }, legend: { orientation: "h", x: 0, y: 1.08 } });
+  const mx = Math.max(...P.map((p) => p.sol || 0), 1);
+  plot("ind-scatter", Object.keys(ICOL).map((cl) => {
+    const v = P.filter((p) => p.class === cl && isNum(p.nres_share) && isNum(p.sol) && p.pop > 0);
+    return { type: "scatter", mode: "markers", name: IT.cls[cl], x: v.map((p) => 100 * p.nres_share), y: v.map((p) => p.sol / p.pop),
+      text: v.map((p) => p.name), marker: { color: ICOL[cl], size: v.map((p) => 6 + 34 * Math.sqrt(p.sol / mx)), opacity: 0.8,
+      line: { color: c.surface, width: 1 } }, hovertemplate: "%{text}<br>%{x:.0f} % · %{y:.3g}<extra>%{fullData.name}</extra>" };
+  }).filter((t) => t.x.length), { xaxis: { title: { text: IT.x_scatter }, range: [0, 100] }, yaxis: { title: { text: IT.y_scatter }, type: "log" },
+    legend: { orientation: "h", x: 0, y: 1.08 } });
+  // ---- table
+  S.indSort = S.indSort || { k: "sol", d: -1 };
+  drawIndTable(P);
+  // ---- map
+  if (!window.L) return;
+  if (!S.imap) {
+    S.imap = L.map("imap", { zoomSnap: 0.25 });
+    S.imap.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
+    S.imap._forceDark = true;
+    setBase(S.imap); addBaseControl(S.imap);
+    S.imap.createPane("raster"); S.imap.getPane("raster").style.zIndex = 350;
+    L.control.scale({ imperial: false }).addTo(S.imap);
+    addMapControls(S.imap);
+    const ys = Object.keys((m.rasters && m.rasters.ntl) || {}).sort();
+    S.ilyr = { ntl: overlay(ys.length ? m.rasters.ntl[ys[ys.length - 1]] : null), adm1: S.d.adm1 ? outline(S.d.adm1) : null };
+    if (S.ilyr.ntl) S.ilyr.ntl.setOpacity(0.55).addTo(S.imap);
+    if (S.ilyr.adm1) S.ilyr.adm1.setStyle({ color: "rgba(255,255,255,0.35)", weight: 0.8 }).addTo(S.imap);
+    S.ilyr.poly = L.geoJSON(gj, { style: (f) => ({ color: ICOL[f.properties.class], weight: 1.4, fillColor: ICOL[f.properties.class], fillOpacity: 0.35, className: "izone" }),
+      onEachFeature: (f, l) => { l.bindTooltip(`<strong>${esc(f.properties.name)}</strong><div class="tip-v">${esc(IT.cls[f.properties.class])}</div>`, { sticky: true });
+        l.bindPopup(() => indPopup(f.properties), { maxWidth: 330, minWidth: 270 }); } }).addTo(S.imap);
+    S.ilyr.pts = L.layerGroup(P.slice().sort((a, b) => (b.sol || 0) - (a.sol || 0)).map((p) => {
+      const mk = L.circleMarker([p.lat, p.lon], { radius: 4 + 22 * Math.sqrt((p.sol || 0) / mx), color: "#fff", weight: 1.2,
+        fillColor: ICOL[p.class], fillOpacity: 0.85, className: "izone-pt" });
+      mk._cls = p.class; mk._id = p.zone_id;
+      mk.bindTooltip(`<strong>${esc(p.name)}</strong><div class="tip-v">${esc(IT.cls[p.class])} · <b>${F.share(p.share_national, 1)}</b></div>`, { direction: "top" });
+      mk.bindPopup(() => indPopup(p), { maxWidth: 330, minWidth: 270 });
+      return mk;
+    })).addTo(S.imap);
+    const b = L.geoJSON(S.d.adm0 || S.d.adm1).getBounds();
+    S.imap.fitBounds(b.isValid() ? b : S.ilyr.poly.getBounds(), { padding: [16, 16] });
+    $("#ind-legend").innerHTML = `<strong>${esc(IT.legend)}</strong>` + Object.keys(ICOL).map((cl) =>
+      `<div><span class="sw round" style="background:${ICOL[cl]}"></span>${esc(IT.cls[cl])}</div>`).join("") +
+      `<div class="ticks"><span>○ ${esc(IT.size)}</span></div>`;
+    $("#ind-filter").onclick = (e) => { const bt = e.target.closest("button"); if (!bt) return;
+      $$("#ind-filter button").forEach((x) => x.classList.toggle("on", x === bt)); indFilter(bt.dataset.c); };
+    $("#ind-ntl").onchange = (e) => showLayer(S.imap, S.ilyr.ntl, e.target.checked);
+    $("#ind-poly").onchange = (e) => showLayer(S.imap, S.ilyr.poly, e.target.checked);
+  }
+  setTimeout(() => S.imap.invalidateSize(), 80);
+};
+function indFilter(cl) {
+  const on = (c) => cl === "all" || c === cl;
+  S.ilyr.pts.eachLayer((mk) => { mk.setStyle({ opacity: on(mk._cls) ? 1 : 0, fillOpacity: on(mk._cls) ? 0.85 : 0 }); if (!on(mk._cls)) mk.closeTooltip(); });
+  S.ilyr.poly.setStyle((f) => ({ opacity: on(f.properties.class) ? 1 : 0, fillOpacity: on(f.properties.class) ? 0.35 : 0 }));
+}
+function drawIndTable(P) {
+  const cols = [
+    ["rank", (p) => p._rank], ["name", (p) => `<a href="#industry" data-z="${esc(p.zone_id)}">${esc(p.name)}</a>`],
+    ["class", (p) => `<span class="pill" style="background:${ICOL[p.class]};color:#1b1b1b">${esc(IT.cls[p.class] || "")}</span>`],
+    ["area_km2", (p) => F.num(p.area_km2, 1)], ["sol", (p) => F.num(p.sol)], ["share_national", (p) => F.share(p.share_national, 2)],
+    ["growth", (p) => F.pct(p.growth)], ["nres_share", (p) => F.share(p.nres_share)], ["pop_density", (p) => F.num(p.pop_density)],
+    ["osm_n", (p) => (isNum(p.osm_n) ? (p.osm_n > 0 ? "✔" : "–") : "n.d.")],
+  ];
+  const byLight = P.slice().sort((a, b) => (b.sol || 0) - (a.sol || 0)); byLight.forEach((p, i) => { p._rank = i + 1; });
+  const { k, d } = S.indSort; const key = k === "rank" ? "_rank" : k;
+  const rows = P.slice().sort((a, b) => { const x = a[key], y = b[key]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * d; });
+  const t = $("#ind-table");
+  t.innerHTML = `<thead><tr>${cols.map(([c], i) => `<th scope="col" data-k="${c}" ${c === k ? `aria-sort="${d > 0 ? "ascending" : "descending"}"` : ""}>${esc(IT.cols[i])}</th>`).join("")}</tr></thead>` +
+    `<tbody>${rows.map((p) => `<tr data-z="${esc(p.zone_id)}">${cols.map(([, f]) => `<td>${f(p)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  t.querySelector("thead").onclick = (e) => { const th = e.target.closest("th"); if (!th) return;
+    S.indSort = { k: th.dataset.k, d: S.indSort.k === th.dataset.k ? -S.indSort.d : (th.dataset.k === "name" || th.dataset.k === "rank" ? 1 : -1) }; drawIndTable(P); };
+  t.querySelector("tbody").onclick = (e) => { const tr = e.target.closest("tr"); if (!tr || !S.imap) return; e.preventDefault();
+    let mk = null; S.ilyr.pts.eachLayer((l) => { if (l._id === tr.dataset.z) mk = l; });
+    if (mk) { $("#imap").scrollIntoView({ behavior: "smooth", block: "center" }); S.imap.flyTo(mk.getLatLng(), 11, { duration: 0.8 }); setTimeout(() => mk.openPopup(), 900); } };
+}
+
 boot();

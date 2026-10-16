@@ -2,12 +2,13 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lumières nocturnes et activité économique</title>
 <meta name="description" content="Tableau de bord : l'activité économique mesurée par les lumières nocturnes (VIIRS), aux niveaux national et régional.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300553A'/%3E%3Ccircle cx='11' cy='13' r='3' fill='%23f5c242'/%3E%3Ccircle cx='21' cy='19' r='2' fill='%23f5c242'/%3E%3Ccircle cx='19' cy='9' r='1.4' fill='%23fde7a6'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/vendor/leaflet.css">
-<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="assets/vendor/leaflet.css?v=20261016184530">
+<link rel="stylesheet" href="assets/style.css?v=20261016184530">
 <script>
   // apply the stored theme before first paint (no flash)
   try { const t = localStorage.getItem("ntl-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
@@ -44,6 +45,7 @@
   <a href="#regions" data-page="regions">Régions</a>
   <a href="#shocks" data-page="shocks">Chocs</a>
   <a href="#inequality" data-page="inequality">Inégalités</a>
+  <a href="#industry" data-page="industry">Zones industrielles</a>
   <a href="#method" data-page="method">Méthode &amp; limites</a>
   <a href="#data" data-page="data">Données</a>
 </nav>
@@ -84,8 +86,10 @@
           <select id="map-level"></select></label>
         <label class="ctl" data-for="choro">Indicateur
           <select id="map-indicator"></select></label>
-        <label class="ctl" data-for="ntl">Année <span id="year-label" class="mono"></span>
-          <input type="range" id="map-year" min="0" max="0" step="1"></label>
+        <div class="ctl" data-for="ntl">
+          <button type="button" id="map-play" class="play-btn" aria-label="Lire l'animation" title="Lire l'animation">▶</button>
+          <label for="map-year">Année <span id="year-label" class="mono"></span></label>
+          <input type="range" id="map-year" min="0" max="0" step="1" aria-label="Année"></div>
         <label class="ctl" data-for="compare">Gauche <select id="cmp-a"></select></label>
         <label class="ctl" data-for="compare">Droite <select id="cmp-b"></select></label>
       </div>
@@ -93,8 +97,9 @@
         <div id="map" class="map" role="region" aria-label="Carte interactive"></div>
         <div id="map-b" class="map map-b" hidden aria-hidden="true"></div>
         <div class="map-legend" id="map-legend"></div>
-        <div class="map-fallback" id="map-fallback" hidden>La carte n'a pas pu être chargée (bibliothèque cartographique
-          inaccessible). Les tableaux des autres pages restent disponibles.</div>
+        <div class="map-fallback" id="map-fallback" hidden style="display:none"></div>
+        <div class="map-year" id="map-year-badge" hidden></div>
+        <div class="map-year b" id="map-year-badge-b" hidden></div>
       </div>
       <p class="help" id="map-help"></p>
       <p class="source" id="map-source"></p>
@@ -248,6 +253,54 @@
     <article class="card"><div id="method"></div></article>
   </section>
 
+  <!-- ================================ INDUSTRY ================================ -->
+  <section class="page" id="page-industry" hidden>
+    <p class="lede" id="ind-lede"></p>
+    <div class="kpis" id="ind-kpis"></div>
+    <div class="card map-card ind-card">
+      <div class="map-toolbar" role="group" aria-label="Filtres des zones">
+        <div class="seg" id="ind-filter">
+          <button type="button" data-c="all" class="on">Toutes</button>
+          <button type="button" data-c="major">Pôles majeurs</button>
+          <button type="button" data-c="zone">Zones industrielles / logistiques</button>
+          <button type="button" data-c="energy">Énergie / extraction</button>
+        </div>
+        <label class="ctl"><input type="checkbox" id="ind-ntl" checked> Lumières nocturnes en fond</label>
+        <label class="ctl"><input type="checkbox" id="ind-poly" checked> Contours des zones</label>
+      </div>
+      <div class="map-wrap ind-wrap">
+        <div id="imap" class="map" role="region" aria-label="Carte des zones industrielles"></div>
+        <div class="map-legend" id="ind-legend"></div>
+      </div>
+      <p class="help">Chaque cercle est une zone candidate ; sa surface est proportionnelle à la lumière émise. Survolez pour
+        l'identifier, cliquez pour sa fiche (évolution de la lumière, bâti non résidentiel, NO₂, validation OpenStreetMap).</p>
+      <p class="source">Sources : VIIRS VNL V2 (NOAA/EOG), GHSL BUILT-S R2023A (bâti non résidentiel) et GHS-POP (JRC),
+        Sentinel-5P TROPOMI NO₂ (ESA/Copernicus), OpenStreetMap (validation) ; calculs Google Earth Engine.</p>
+    </div>
+    <div class="grid two">
+      <article class="card">
+        <h2>Les 15 zones qui émettent le plus de lumière</h2>
+        <p class="help">Part de la lumière nationale émise par chaque zone (dernière année), couleur = type de zone.</p>
+        <div class="chart tall" id="ind-top"></div>
+      </article>
+      <article class="card">
+        <h2>Signature industrielle des zones</h2>
+        <p class="help">Plus une zone est à droite (bâti surtout non résidentiel) et haut (beaucoup de lumière par habitant),
+          plus son profil est industriel. Taille = lumière émise.</p>
+        <div class="chart tall" id="ind-scatter"></div>
+      </article>
+    </div>
+    <article class="card">
+      <h2>Toutes les zones détectées</h2>
+      <p class="help">Cliquez sur une ligne pour centrer la carte sur la zone. Colonnes triables.</p>
+      <div class="table-wrap ind-table-wrap"><table class="data" id="ind-table"></table></div>
+    </article>
+    <article class="card prose">
+      <h2>Méthode, validation et limites</h2>
+      <div id="ind-method"></div>
+    </article>
+  </section>
+
   <!-- ================================ DATA ================================ -->
   <section class="page" id="page-data" hidden>
     <article class="card">
@@ -259,13 +312,19 @@
   </section>
 </main>
 <footer class="foot wrap">
+  <div class="foot-brand">
+    <span class="fb-afdb">Banque africaine de développement</span>
+    <span class="fb-x">×</span>
+    <span class="fb-imf">FMI · Centre Big Data</span>
+    <span class="fb-ev">Atelier « Big Data pour les statistiques macroéconomiques » · Maurice, 26–30 octobre 2026</span>
+  </div>
   <p id="foot"></p>
 </footer>
 
-<script src="assets/vendor/leaflet.js"></script>
+<script src="assets/vendor/leaflet.js?v=20261016184530"></script>
 <script>window.L || document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>')</script>
-<script src="assets/vendor/plotly.min.js" charset="utf-8"></script>
+<script src="assets/vendor/plotly.min.js?v=20261016184530" charset="utf-8"></script>
 <script>window.Plotly || document.write('<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8"><\/script>')</script>
-<script src="assets/app.js"></script>
+<script src="assets/app.js?v=20261016184530"></script>
 </body>
 </html>

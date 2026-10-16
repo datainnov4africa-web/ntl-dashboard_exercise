@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Night-Time Lights and Economic Activity</title>
 <meta name="description" content="Dashboard: economic activity measured with night-time lights (VIIRS) at national and subnational levels.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300553A'/%3E%3Ccircle cx='11' cy='13' r='3' fill='%23f5c242'/%3E%3Ccircle cx='21' cy='19' r='2' fill='%23f5c242'/%3E%3Ccircle cx='19' cy='9' r='1.4' fill='%23fde7a6'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/vendor/leaflet.css">
-<link rel="stylesheet" href="assets/style.css">
+<link rel="stylesheet" href="assets/vendor/leaflet.css?v=20261016184531">
+<link rel="stylesheet" href="assets/style.css?v=20261016184531">
 <script>
   // apply the stored theme before first paint (no flash)
   try { const t = localStorage.getItem("ntl-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
@@ -44,6 +45,7 @@
   <a href="#regions" data-page="regions">Regions</a>
   <a href="#shocks" data-page="shocks">Shocks</a>
   <a href="#inequality" data-page="inequality">Inequality</a>
+  <a href="#industry" data-page="industry">Industrial zones</a>
   <a href="#method" data-page="method">Methods &amp; limitations</a>
   <a href="#data" data-page="data">Data</a>
 </nav>
@@ -84,8 +86,10 @@
           <select id="map-level"></select></label>
         <label class="ctl" data-for="choro">Indicator
           <select id="map-indicator"></select></label>
-        <label class="ctl" data-for="ntl">Year <span id="year-label" class="mono"></span>
-          <input type="range" id="map-year" min="0" max="0" step="1"></label>
+        <div class="ctl" data-for="ntl">
+          <button type="button" id="map-play" class="play-btn" aria-label="Play the animation" title="Play the animation">▶</button>
+          <label for="map-year">Year <span id="year-label" class="mono"></span></label>
+          <input type="range" id="map-year" min="0" max="0" step="1" aria-label="Year"></div>
         <label class="ctl" data-for="compare">Left <select id="cmp-a"></select></label>
         <label class="ctl" data-for="compare">Right <select id="cmp-b"></select></label>
       </div>
@@ -93,8 +97,9 @@
         <div id="map" class="map" role="region" aria-label="Interactive map"></div>
         <div id="map-b" class="map map-b" hidden aria-hidden="true"></div>
         <div class="map-legend" id="map-legend"></div>
-        <div class="map-fallback" id="map-fallback" hidden>The map could not be loaded (mapping library
-          unavailable). The tables on the other pages remain available.</div>
+        <div class="map-fallback" id="map-fallback" hidden style="display:none"></div>
+        <div class="map-year" id="map-year-badge" hidden></div>
+        <div class="map-year b" id="map-year-badge-b" hidden></div>
       </div>
       <p class="help" id="map-help"></p>
       <p class="source" id="map-source"></p>
@@ -248,6 +253,54 @@
     <article class="card"><div id="method"></div></article>
   </section>
 
+  <!-- ================================ INDUSTRY ================================ -->
+  <section class="page" id="page-industry" hidden>
+    <p class="lede" id="ind-lede"></p>
+    <div class="kpis" id="ind-kpis"></div>
+    <div class="card map-card ind-card">
+      <div class="map-toolbar" role="group" aria-label="Zone filters">
+        <div class="seg" id="ind-filter">
+          <button type="button" data-c="all" class="on">All</button>
+          <button type="button" data-c="major">Major hubs</button>
+          <button type="button" data-c="zone">Industrial / logistics zones</button>
+          <button type="button" data-c="energy">Energy / extraction</button>
+        </div>
+        <label class="ctl"><input type="checkbox" id="ind-ntl" checked> Night lights in the background</label>
+        <label class="ctl"><input type="checkbox" id="ind-poly" checked> Zone outlines</label>
+      </div>
+      <div class="map-wrap ind-wrap">
+        <div id="imap" class="map" role="region" aria-label="Map of industrial zones"></div>
+        <div class="map-legend" id="ind-legend"></div>
+      </div>
+      <p class="help">Each circle is a candidate zone; its area is proportional to the light it emits. Hover to identify it,
+        click for its profile (light trend, non-residential buildings, NO₂, OpenStreetMap validation).</p>
+      <p class="source">Sources: VIIRS VNL V2 (NOAA/EOG), GHSL BUILT-S R2023A (non-residential built-up) and GHS-POP (JRC),
+        Sentinel-5P TROPOMI NO₂ (ESA/Copernicus), OpenStreetMap (validation); computed on Google Earth Engine.</p>
+    </div>
+    <div class="grid two">
+      <article class="card">
+        <h2>The 15 zones emitting the most light</h2>
+        <p class="help">Share of national light emitted by each zone (latest year), colour = zone type.</p>
+        <div class="chart tall" id="ind-top"></div>
+      </article>
+      <article class="card">
+        <h2>Industrial signature of the zones</h2>
+        <p class="help">The further right (mostly non-residential buildings) and the higher (much light per resident), the
+          more industrial the profile. Size = light emitted.</p>
+        <div class="chart tall" id="ind-scatter"></div>
+      </article>
+    </div>
+    <article class="card">
+      <h2>All detected zones</h2>
+      <p class="help">Click a row to centre the map on the zone. Sortable columns.</p>
+      <div class="table-wrap ind-table-wrap"><table class="data" id="ind-table"></table></div>
+    </article>
+    <article class="card prose">
+      <h2>Method, validation and limitations</h2>
+      <div id="ind-method"></div>
+    </article>
+  </section>
+
   <!-- ================================ DATA ================================ -->
   <section class="page" id="page-data" hidden>
     <article class="card">
@@ -259,13 +312,19 @@
   </section>
 </main>
 <footer class="foot wrap">
+  <div class="foot-brand">
+    <span class="fb-afdb">African Development Bank</span>
+    <span class="fb-x">×</span>
+    <span class="fb-imf">IMF · Big Data Center</span>
+    <span class="fb-ev">Workshop “Big Data for Macroeconomic Statistics” · Mauritius, 26–30 October 2026</span>
+  </div>
   <p id="foot"></p>
 </footer>
 
-<script src="assets/vendor/leaflet.js"></script>
+<script src="assets/vendor/leaflet.js?v=20261016184531"></script>
 <script>window.L || document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>')</script>
-<script src="assets/vendor/plotly.min.js" charset="utf-8"></script>
+<script src="assets/vendor/plotly.min.js?v=20261016184531" charset="utf-8"></script>
 <script>window.Plotly || document.write('<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8"><\/script>')</script>
-<script src="assets/app.js"></script>
+<script src="assets/app.js?v=20261016184531"></script>
 </body>
 </html>
