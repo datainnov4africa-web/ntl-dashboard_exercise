@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use these estimates, please cite them as below."
+title: "Night-time lights and economic activity — Tunisia"
+authors:
+  - name: "African Development Bank"
+  - name: "IMF Big Data Center"
+date-released: 2026-10-16
+url: "https://datainnov4africa-web.github.io/ntl-dashboard_exercise/"
+repository-code: "https://github.com/datainnov4africa-web/ntl-dashboard_exercise"
+license: MIT
