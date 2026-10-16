@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Night-Time Lights and Economic Activity</title>
+<meta name="description" content="Dashboard: economic activity measured with night-time lights (VIIRS) at national and subnational levels.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300553A'/%3E%3Ccircle cx='11' cy='13' r='3' fill='%23f5c242'/%3E%3Ccircle cx='21' cy='19' r='2' fill='%23f5c242'/%3E%3Ccircle cx='19' cy='9' r='1.4' fill='%23fde7a6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/vendor/leaflet.css">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  // apply the stored theme before first paint (no flash)
+  try { const t = localStorage.getItem("ntl-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="brand">
+    <img id="flag" class="flag" alt="Flag" hidden>
+    <div>
+      <div class="eyebrow">African Development Bank · Night-time lights and economic activity</div>
+      <h1 id="country-title">Loading…</h1>
+    </div>
+  </div>
+  <div class="controls">
+    <span class="cobrand">AfDB × IMF · Big Data Center</span>
+    <a id="lang-switch" class="lang-btn" href="#" title="Version française" hreflang="fr">FR</a>
+    <label class="sr" for="country-select">Country</label>
+    <select id="country-select" hidden></select>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme" title="Light / dark theme">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+    </button>
+  </div>
+</header>
+<div id="synthetic-banner" class="banner" hidden role="alert">
+  ⚠️ <strong>Synthetic test data</strong>: this dashboard is only meant to check the processing pipeline.
+  None of the figures shown are real statistics.
+</div>
+<nav class="tabs" aria-label="Pages">
+  <a href="#overview" data-page="overview">Overview</a>
+  <a href="#map" data-page="map">Map</a>
+  <a href="#time" data-page="time">Trends</a>
+  <a href="#regions" data-page="regions">Regions</a>
+  <a href="#shocks" data-page="shocks">Shocks</a>
+  <a href="#inequality" data-page="inequality">Inequality</a>
+  <a href="#method" data-page="method">Methods &amp; limitations</a>
+  <a href="#data" data-page="data">Data</a>
+</nav>
+
+<main id="main" class="wrap">
+  <!-- ================================ OVERVIEW ================================ -->
+  <section class="page" id="page-overview">
+    <p class="lede" id="lede"></p>
+    <div class="kpis" id="kpis"></div>
+    <div class="grid two">
+      <article class="card">
+        <h2>Key messages</h2>
+        <p class="help">Generated automatically from the results. The badge shows the confidence level
+          and the reason for it (sample size, significance, sensitivity to thresholds).</p>
+        <ol class="messages" id="messages"></ol>
+      </article>
+      <article class="card">
+        <h2>National light activity, month by month</h2>
+        <p class="help">The solid line removes seasonal variation (snow, vegetation, holidays): read this line
+          to judge whether activity is rising or falling.</p>
+        <div class="chart" id="ov-series"></div>
+        <p class="source">Source: VIIRS DNB monthly (NOAA/EOG), cleaning and STL seasonal adjustment.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================================ MAP ================================ -->
+  <section class="page" id="page-map" hidden>
+    <div class="card map-card">
+      <div class="map-toolbar" role="group" aria-label="Map options">
+        <div class="seg" id="map-mode">
+          <button type="button" data-mode="choro" class="on">Indicators</button>
+          <button type="button" data-mode="ntl">Lights</button>
+          <button type="button" data-mode="compare">Before / after</button>
+          <button type="button" data-mode="dark">Areas in the dark</button>
+        </div>
+        <label class="ctl" data-for="choro">Level
+          <select id="map-level"></select></label>
+        <label class="ctl" data-for="choro">Indicator
+          <select id="map-indicator"></select></label>
+        <label class="ctl" data-for="ntl">Year <span id="year-label" class="mono"></span>
+          <input type="range" id="map-year" min="0" max="0" step="1"></label>
+        <label class="ctl" data-for="compare">Left <select id="cmp-a"></select></label>
+        <label class="ctl" data-for="compare">Right <select id="cmp-b"></select></label>
+      </div>
+      <div class="map-wrap">
+        <div id="map" class="map" role="region" aria-label="Interactive map"></div>
+        <div id="map-b" class="map map-b" hidden aria-hidden="true"></div>
+        <div class="map-legend" id="map-legend"></div>
+        <div class="map-fallback" id="map-fallback" hidden>The map could not be loaded (mapping library
+          unavailable). The tables on the other pages remain available.</div>
+      </div>
+      <p class="help" id="map-help"></p>
+      <p class="source" id="map-source"></p>
+    </div>
+  </section>
+
+  <!-- ================================ TIME ================================ -->
+  <section class="page" id="page-time" hidden>
+    <article class="card">
+      <h2>National series: observed, seasonally adjusted, trend</h2>
+      <p class="help">Grey bands mark known events; purple lines, statistically detected structural breaks;
+        orange dots, anomalous months (deviation of at least 5% after removing seasonality).</p>
+      <div class="chart tall" id="t-series"></div>
+      <p class="source">Source: VIIRS DNB monthly (VCMSLCFG); robust STL on log(SoL); breaks from piecewise-linear segmentation.</p>
+    </article>
+    <div class="grid two">
+      <article class="card">
+        <h2>Year-on-year growth (same month)</h2>
+        <p class="help">Comparing a month with the same month of the previous year neutralises seasonality.</p>
+        <div class="chart" id="t-yoy"></div>
+        <p class="source">Source: VIIRS DNB monthly; own calculations.</p>
+      </article>
+      <article class="card">
+        <h2>Regions (ADM1), seasonally adjusted series</h2>
+        <p class="help">Index 100 = first-year average: this compares growth paths, not sizes.</p>
+        <div class="chart" id="t-regions"></div>
+        <p class="source">Source: VIIRS DNB monthly; STL by region.</p>
+      </article>
+    </div>
+    <h2 class="section-title">Lights and GDP</h2>
+    <div class="grid two">
+      <article class="card">
+        <h3>Relationship between log(lights) and log(real GDP)</h3>
+        <p class="help">The slope β is the elasticity: on average, +1% GDP is associated with +β% light.</p>
+        <div class="chart" id="g-scatter"></div>
+        <div id="g-table"></div>
+        <p class="source">Sources: VIIRS VNL V2 annual; World Bank (NY.GDP.MKTP.KD); OLS, HAC standard errors.</p>
+      </article>
+      <article class="card">
+        <h3>GDP growth: official and estimated from lights</h3>
+        <p class="help">Out-of-sample estimate: each year is predicted without using it. The last point,
+          if any, estimates a year not yet covered by official statistics.</p>
+        <div class="chart" id="g-track"></div>
+        <p class="source">Sources: World Bank; VIIRS monthly aggregated by year; growth-rate model.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================================ REGIONS ================================ -->
+  <section class="page" id="page-regions" hidden>
+    <div class="toolbar">
+      <div class="seg" id="reg-level"></div>
+      <input type="search" id="reg-search" placeholder="Search for a unit…" aria-label="Search for a unit">
+    </div>
+    <div class="grid two">
+      <article class="card">
+        <h2>Who is growing, stagnating or declining?</h2>
+        <p class="help">Robust annual growth (Theil–Sen slope) with its 95% interval. "Growth" and
+          "Decline" require a statistically significant trend of at least ±1%/year.</p>
+        <div class="chart tall" id="r-rank"></div>
+        <p class="source">Source: VIIRS VNL V2 annual, gas flares masked.</p>
+      </article>
+      <article class="card">
+        <h2>Where is activity concentrated?</h2>
+        <p class="help">Share of national light emitted by the brightest unit and by the brightest 10% of units.</p>
+        <div class="chart" id="r-conc"></div>
+        <h3>Convergence</h3>
+        <p class="help">Each point is a unit: growth of light per capita against its initial level.
+          A negative slope means the least-lit units are catching up.</p>
+        <div class="chart" id="r-beta"></div>
+        <p class="source">Source: VIIRS VNL V2; population GHSL/WorldPop.</p>
+      </article>
+    </div>
+    <article class="card flush">
+      <div class="table-wrap"><table id="r-table" class="data"></table></div>
+    </article>
+  </section>
+
+  <!-- ================================ SHOCKS ================================ -->
+  <section class="page" id="page-shocks" hidden>
+    <article class="card">
+      <h2>Shocks: depth and recovery time</h2>
+      <p class="help">Trough = maximum deviation of the seasonally adjusted level from its average over the 12 months before the event.
+        Recovery = first month in which that level is regained.</p>
+      <div id="s-table"></div>
+    </article>
+    <div class="grid two">
+      <article class="card">
+        <h2>Daily data (Black Marble)</h2>
+        <label class="ctl">Window <select id="s-window"></select></label>
+        <div class="chart" id="s-daily"></div>
+        <p class="source">Source: NASA Black Marble VNP46A2, high-quality pixels free of cloud and snow.</p>
+      </article>
+      <article class="card">
+        <h2>Impact by region</h2>
+        <label class="ctl">Event <select id="s-event"></select></label>
+        <div class="chart" id="s-regional"></div>
+        <p class="source">Source: VIIRS DNB monthly, seasonally adjusted by region.</p>
+      </article>
+    </div>
+    <article class="card">
+      <h2>Detected structural breaks</h2>
+      <p class="help">A break with no known event within ±6 months warrants investigation: sensor change, outage,
+        unrecorded local event.</p>
+      <div id="s-breaks"></div>
+    </article>
+  </section>
+
+  <!-- ================================ INEQUALITY ================================ -->
+  <section class="page" id="page-inequality" hidden>
+    <div class="grid two">
+      <article class="card">
+        <h2>Lorenz curve of light</h2>
+        <p class="help">The further the curve lies from the diagonal, the more light (and the activity it reflects) is
+          concentrated in a small share of the population.</p>
+        <div class="chart" id="i-lorenz"></div>
+        <p class="source">Source: VIIRS VNL V2; population GHSL/WorldPop; light per capita of units.</p>
+      </article>
+      <article class="card">
+        <h2>Gini and Theil over time</h2>
+        <p class="help">The Theil index decomposes into inequality <em>between</em> regions and <em>within</em> regions.</p>
+        <div class="chart" id="i-gini"></div>
+        <div class="chart short" id="i-theil"></div>
+        <p class="source">Source: calculations on VIIRS VNL V2 and population.</p>
+      </article>
+    </div>
+    <h2 class="section-title">Populations "in the dark"</h2>
+    <div class="grid two">
+      <article class="card">
+        <h3>People living in areas with no detectable light</h3>
+        <p class="help">The shaded band shows the range obtained with different radiance thresholds: it is the
+          uncertainty margin of the indicator.</p>
+        <div class="chart" id="i-dark"></div>
+        <p class="source">Sources: VIIRS VNL V2; GHSL/WorldPop; World Bank (EG.ELC.ACCS.ZS).</p>
+      </article>
+      <article class="card">
+        <h3>Where are they?</h3>
+        <div class="chart tall" id="i-dark-units"></div>
+        <p class="source">Source: VIIRS VNL V2; GHSL/WorldPop.</p>
+      </article>
+    </div>
+    <article class="card">
+      <h3>Urban / rural gap</h3>
+      <p class="help">Light per capita in urban areas divided by that in rural areas (GHSL degree of urbanisation).</p>
+      <div class="chart short" id="i-urban"></div>
+    </article>
+  </section>
+
+  <!-- ================================ METHOD ================================ -->
+  <section class="page prose" id="page-method" hidden>
+    <article class="card"><div id="method"></div></article>
+  </section>
+
+  <!-- ================================ DATA ================================ -->
+  <section class="page" id="page-data" hidden>
+    <article class="card">
+      <h2>Download the data</h2>
+      <p class="help">All tables shown can be downloaded. Licences: VIIRS and Black Marble (public domain,
+        attribution requested), geoBoundaries and WorldPop (CC BY 4.0), GHSL (CC BY 4.0), World Bank (CC BY 4.0).</p>
+      <ul class="downloads" id="downloads"></ul>
+    </article>
+  </section>
+</main>
+<footer class="foot wrap">
+  <p id="foot"></p>
+</footer>
+
+<script src="assets/vendor/leaflet.js"></script>
+<script>window.L || document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>')</script>
+<script src="assets/vendor/plotly.min.js" charset="utf-8"></script>
+<script>window.Plotly || document.write('<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8"><\/script>')</script>
+<script src="assets/app.js"></script>
+</body>
+</html>

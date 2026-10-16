@@ -99,6 +99,13 @@ const CLASS_COL = (c) => ({ Croissance: C().grow, Stagnation: C().flat, "Déclin
 /* ---------------------------------------------------------------- header / routing */
 function renderHeader() {
   const m = S.d.meta;
+  const fl = $("#flag");
+  if (fl) {   // local flag written at export, then flagcdn.com, else hidden
+    const iso2 = (m.iso2 || "").toLowerCase();
+    fl.onerror = () => { if (iso2 && !fl.dataset.cdn) { fl.dataset.cdn = 1; fl.src = `https://flagcdn.com/${iso2}.svg`; } else fl.hidden = true; };
+    fl.onload = () => { fl.hidden = false; };
+    fl.src = `data/${S.iso}/flag.svg`;
+  }
   $("#country-title").textContent = `${m.name} · ${m.period[0]}–${m.period[1]}`;
   document.title = `${m.name} — lumières nocturnes et activité économique`;
   $("#synthetic-banner").hidden = !m.synthetic;
@@ -116,7 +123,7 @@ function route() {
     try { RENDER[p](); } catch (e) { console.error(e); }
     S.rendered[p] = true;
   }
-  if (p === "map" && S.map) setTimeout(() => S.map.resize(), 50);
+  if (p === "map" && S.map) setTimeout(() => S.map.invalidateSize(), 50);
   window.dispatchEvent(new Event("resize"));
 }
 
@@ -436,35 +443,38 @@ const SEQ_B = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95",
 const SEQ_O = ["#fde3d6", "#f9bfa4", "#f39a72", "#eb6834", "#c94f20", "#9f3c17", "#73290e"];
 const DIV = ["#e34948", "#ef8f8a", "#f6c6c2", "#d9d8d2", "#b7d3f6", "#6da7ec", "#2a78d6"];
 
-// Basemap: OpenFreeMap vector styles (free, no API key). If unreachable, a plain background is used.
-const BASEMAP = { light: "https://tiles.openfreemap.org/styles/positron", dark: "https://tiles.openfreemap.org/styles/dark" };
+// Map: Leaflet (no WebGL needed, works on every browser), CARTO raster basemap, PNG overlays in Web Mercator.
+const TILES = { light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" };
+const TILE_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · © <a href="https://carto.com/attributions">CARTO</a>';
 const effTheme = () => document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-async function baseStyle(theme) {
-  try {
-    const r = await fetch(BASEMAP[theme]); if (!r.ok) throw new Error(r.status);
-    const st = await r.json();
-    st.layers.forEach((l) => { l.metadata = { ...(l.metadata || {}), base: true }; });
-    return st;
-  } catch (e) {
-    return { version: 8, sources: {}, layers: [{ id: "bg", type: "background", metadata: { base: true }, paint: { "background-color": css("--surface-2") } }] };
-  }
-}
-// first label layer of the basemap: data layers go below it so place names stay readable
-const labelsBefore = (mp) => (mp.getStyle().layers.find((l) => l.type === "symbol") || {}).id;
-async function newMap(container) {
-  return new maplibregl.Map({ container, attributionControl: { compact: true }, preserveDrawingBuffer: true,
-    style: await baseStyle(effTheme()), bounds: bbox(S.d.adm0), fitBoundsOptions: { padding: 24 } });
-}
-function bbox(gj) {
-  let w = 180, s = 90, e = -180, n = -90;
-  const walk = (c) => { if (typeof c[0] === "number") { w = Math.min(w, c[0]); e = Math.max(e, c[0]); s = Math.min(s, c[1]); n = Math.max(n, c[1]); } else c.forEach(walk); };
-  (gj?.features || []).forEach((f) => walk(f.geometry.coordinates));
-  return [[w, s], [e, n]];
-}
+const rasterUrl = (f) => `data/${S.iso}/rasters/${f}`;
 function quantiles(vals, k = 7) {
   const v = vals.filter(isNum).sort((a, b) => a - b); if (!v.length) return [];
   return Array.from({ length: k - 1 }, (_, i) => v[Math.floor(((i + 1) / k) * (v.length - 1))]);
 }
+function mapBounds() {
+  const R = S.d.meta.rasters;
+  try { const b = L.geoJSON(S.d.adm0 || S.d.adm1).getBounds(); if (b.isValid()) return b; } catch (e) { /* fall through */ }
+  if (R && R.bounds) { const [w, s, e, n] = R.bounds; return L.latLngBounds([s, w], [n, e]); }
+  return L.latLngBounds([-35, -20], [38, 52]);
+}
+function newMap(id) {
+  const mp = L.map(id, { zoomSnap: 0.25, worldCopyJump: false });
+  mp.attributionControl.setPrefix('<a href="https://leafletjs.com">Leaflet</a>');
+  mp._base = L.tileLayer(TILES[effTheme()], { attribution: TILE_ATTR, subdomains: "abcd", maxZoom: 19 }).addTo(mp);
+  mp.createPane("raster"); mp.getPane("raster").style.zIndex = 350;
+  L.control.scale({ imperial: false }).addTo(mp);
+  mp.fitBounds(mapBounds(), { padding: [16, 16] });
+  return mp;
+}
+function overlay(f) {
+  const R = S.d.meta.rasters || {}; if (!R.bounds || !f) return null;
+  const [w, s, e, n] = R.bounds;
+  return L.imageOverlay(rasterUrl(f), [[s, w], [n, e]], { pane: "raster", opacity: 0.95, interactive: false });
+}
+const outline = (gj) => L.geoJSON(gj, { interactive: false, style: { color: "rgba(255,255,255,0.8)", weight: 1, fill: false } });
+function showLayer(mp, lyr, on) { if (!mp || !lyr) return; if (on && !mp.hasLayer(lyr)) lyr.addTo(mp); if (!on && mp.hasLayer(lyr)) mp.removeLayer(lyr); }
+function mapFail(msg) { const fb = $("#map-fallback"); fb.textContent = msg; fb.hidden = false; }
 
 RENDER.map = async () => {
   const m = S.d.meta;
@@ -474,69 +484,55 @@ RENDER.map = async () => {
   fillInd();
   const years = Object.keys((m.rasters && m.rasters.ntl) || {}).sort();
   yr.max = Math.max(0, years.length - 1); yr.value = yr.max;
-  if (!window.maplibregl) { $("#map-fallback").hidden = false; return; }
-  try { S.map = await newMap("map"); } catch (e) { console.error(e); $("#map-fallback").hidden = false; return; }
-  S.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-  S.map.on("load", () => {
-    const before = labelsBefore(S.map);
+  const ca = $("#cmp-a"), cb = $("#cmp-b");
+  if (ca && cb) { const o = years.map((y) => `<option>${y}</option>`).join(""); ca.innerHTML = cb.innerHTML = o; ca.value = years[0]; cb.value = years[years.length - 1]; }
+  if (!window.L) { mapFail("La bibliothèque cartographique (Leaflet) n'a pas pu être chargée. Rechargez la page ; les tableaux des autres pages restent disponibles."); return; }
+  try {
+    S.map = newMap("map");
+    S.lyr = {};
     for (const lv of ["ADM1", "ADM2"]) {
       const gj = S.d[lv.toLowerCase()]; if (!gj) continue;
-      S.map.addSource(lv, { type: "geojson", data: gj, promoteId: "unit_id" });
-      S.map.addLayer({ id: lv + "-fill", type: "fill", source: lv, layout: { visibility: "none" }, paint: { "fill-opacity": 0.82, "fill-color": "#ccc" } }, before);
-      S.map.addLayer({ id: lv + "-line", type: "line", source: lv, layout: { visibility: "none" },
-        paint: { "line-color": ["case", ["boolean", ["feature-state", "hover"], false], css("--ink"), "rgba(255,255,255,0.75)"],
-          "line-width": ["case", ["boolean", ["feature-state", "hover"], false], 2, lv === "ADM1" ? 1 : 0.5] } }, before);
-      let hov = null;
-      S.map.on("mousemove", lv + "-fill", (e) => { if (hov) S.map.setFeatureState({ source: lv, id: hov }, { hover: false });
-        hov = e.features[0].id; S.map.setFeatureState({ source: lv, id: hov }, { hover: true }); S.map.getCanvas().style.cursor = "pointer"; });
-      S.map.on("mouseleave", lv + "-fill", () => { if (hov) S.map.setFeatureState({ source: lv, id: hov }, { hover: false }); hov = null; S.map.getCanvas().style.cursor = ""; });
-      S.map.on("click", lv + "-fill", (e) => popup(e, lv));
+      S.lyr[lv] = L.geoJSON(gj, { style: () => ({ color: "rgba(255,255,255,0.8)", weight: lv === "ADM1" ? 1 : 0.5, fillOpacity: 0.82, fillColor: "#ccc" }),
+        onEachFeature: (f, l) => {
+          l.bindTooltip(esc(f.properties.name || ""), { sticky: true, direction: "top", opacity: 0.95 });
+          l.on({ mouseover: (e) => { e.target.setStyle({ weight: 2.5, color: css("--ink") }); e.target.bringToFront(); },
+                 mouseout: (e) => S.lyr[lv].resetStyle(e.target), click: (e) => popup(f.properties, lv, e.latlng) });
+        } });
     }
-    const R = m.rasters;
-    if (R && R.bounds) {
-      const [w, s, e, n] = R.bounds; const coords = [[w, n], [e, n], [e, s], [w, s]];
-      if (years.length) {
-        S.map.addSource("ntl", { type: "image", url: `data/${S.iso}/rasters/${R.ntl[years[years.length - 1]]}`, coordinates: coords });
-        S.map.addLayer({ id: "ntl", type: "raster", source: "ntl", layout: { visibility: "none" }, paint: { "raster-opacity": 0.95, "raster-fade-duration": 0 } }, "ADM1-fill");
-      }
-      const dk = Object.values(R.dark || {})[0];
-      if (dk) {
-        S.map.addSource("dark", { type: "image", url: `data/${S.iso}/rasters/${dk}`, coordinates: coords });
-        S.map.addLayer({ id: "dark", type: "raster", source: "dark", layout: { visibility: "none" }, paint: { "raster-opacity": 0.9, "raster-resampling": "nearest" } }, "ADM1-fill");
-      }
-    }
+    S.lyr.outline = S.d.adm1 ? outline(S.d.adm1) : null;
+    S.lyr.ntl = overlay(years.length ? m.rasters.ntl[years[years.length - 1]] : null);
+    S.lyr.dark = overlay(Object.values((m.rasters && m.rasters.dark) || {})[0]);
     S.mapReady = true;
-    S.map.resize();
+    setTimeout(() => { S.map.invalidateSize(); S.map.fitBounds(mapBounds(), { padding: [16, 16] }); }, 80);
     applyMapMode();
-  });
+  } catch (e) { console.error(e); mapFail("La carte n'a pas pu être initialisée : " + (e && e.message ? e.message : e)); return; }
   $("#map-mode").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; $$("#map-mode button").forEach((x) => x.classList.toggle("on", x === b)); S.mapMode = b.dataset.mode; applyMapMode(); };
   lvSel.onchange = () => { fillInd(); applyMapMode(); };
   indSel.onchange = applyMapMode;
   yr.oninput = () => applyMapMode();
-  $("#swipe").oninput = () => clipCompare();
+  if (ca && cb) { ca.onchange = cb.onchange = () => applyMapMode(); }
 };
-
-function setVis(id, on) { if (S.map.getLayer(id)) S.map.setLayoutProperty(id, "visibility", on ? "visible" : "none"); }
 
 function applyMapMode() {
   if (!S.map || !S.mapReady) return;
   const mode = S.mapMode, m = S.d.meta, lv = $("#map-level").value;
-  if (S.popup) { S.popup.remove(); S.popup = null; }
+  S.map.closePopup();
   const years = Object.keys((m.rasters && m.rasters.ntl) || {}).sort();
-  $$(".map-toolbar .ctl").forEach((el) => { el.hidden = !(el.dataset.for === mode || (el.dataset.for === "choro" && mode === "choro")); });
-  ["ADM1", "ADM2"].forEach((l) => { setVis(l + "-fill", mode === "choro" && l === lv); setVis(l + "-line", (mode === "choro" && l === lv) || (mode !== "choro" && l === "ADM1")); });
-  setVis("ntl", mode === "ntl" || mode === "compare"); setVis("dark", mode === "dark");
-  $("#map-b").hidden = mode !== "compare"; $("#swipe").hidden = mode !== "compare";
+  $$(".map-toolbar .ctl").forEach((el) => { el.hidden = el.dataset.for !== mode; });
+  ["ADM1", "ADM2"].forEach((l) => showLayer(S.map, S.lyr[l], mode === "choro" && l === lv));
+  showLayer(S.map, S.lyr.outline, mode !== "choro");
+  showLayer(S.map, S.lyr.ntl, mode === "ntl" || mode === "compare");
+  showLayer(S.map, S.lyr.dark, mode === "dark");
   const legend = $("#map-legend"), help = $("#map-help"), src = $("#map-source");
-  src.textContent = "Sources : VIIRS VNL V2 (NOAA/EOG) via Google Earth Engine ; limites " + ((m.boundaries || {}).ADM1 || "geoBoundaries") + " ; fond de carte OpenFreeMap, © OpenMapTiles, données © contributeurs OpenStreetMap.";
+  src.textContent = "Sources : VIIRS VNL V2 (NOAA/EOG) via Google Earth Engine ; limites {b} ; fond de carte © OpenStreetMap, © CARTO.".replace("{b}", (m.boundaries || {}).ADM1 || "geoBoundaries");
   if (mode === "choro") {
     const ind = INDICATORS.find((i) => i.k === $("#map-indicator").value) || INDICATORS[0];
     const feats = (S.d[lv.toLowerCase()] || {}).features || [];
-    let expr, leg;
+    let colorOf, leg;
     if (ind.kind === "cat") {
       const cols = { Croissance: css("--grow"), Stagnation: css("--flat"), "Déclin": css("--decline") };
-      expr = ["match", ["coalesce", ["get", "class"], ""], ...Object.entries(cols).flat(), css("--grid")];
-      leg = Object.entries(cols).map(([k, v]) => `<div><span class="sw" style="background:${v}"></span>${k}</div>`).join("");
+      colorOf = (p) => cols[p.class] || css("--grid");
+      leg = Object.entries(cols).map(([k, v]) => `<div><span class="sw" style="background:${v}"></span>${esc(k)}</div>`).join("");
     } else {
       const vals = feats.map((f) => f.properties[ind.k]);
       let breaks, ramp, lo = Math.min(...vals.filter(isNum)), hi = Math.max(...vals.filter(isNum));
@@ -545,59 +541,55 @@ function applyMapMode() {
         breaks = [-2.5 * st, -1.5 * st, -0.5 * st, 0.5 * st, 1.5 * st, 2.5 * st]; ramp = DIV; lo = -mx; hi = mx;
       } else { breaks = quantiles(vals); ramp = ind.kind === "seqo" ? SEQ_O : SEQ_B; }
       const uniq = breaks.filter((b, i) => i === 0 || b > breaks[i - 1]);
-      expr = ["case", ["!=", ["typeof", ["get", ind.k]], "number"], css("--grid"), ["step", ["get", ind.k], ramp[0], ...uniq.flatMap((b, i) => [b, ramp[Math.min(i + 1, ramp.length - 1)]])]];
+      colorOf = (p) => { const v = p[ind.k]; if (!isNum(v)) return css("--grid"); let k = 0; while (k < uniq.length && v >= uniq[k]) k++; return ramp[Math.min(k, ramp.length - 1)]; };
       leg = `<div class="ramp" style="background:linear-gradient(90deg,${ramp.join(",")})"></div><div class="ticks"><span>${ind.fmt(lo)}</span>${ind.kind === "div" ? "<span>0</span>" : ""}<span>${ind.fmt(hi)}</span></div>`;
     }
-    S.map.setPaintProperty(lv + "-fill", "fill-color", expr);
+    const lyr = S.lyr[lv];
+    if (lyr) { lyr.options.style = (f) => ({ color: "rgba(255,255,255,0.85)", weight: lv === "ADM1" ? 1 : 0.5, fillOpacity: 0.82, fillColor: colorOf(f.properties) }); lyr.setStyle(lyr.options.style); }
     legend.innerHTML = `<strong>${esc(ind.t)}</strong>${leg}<div class="ticks"><span><span class="sw" style="background:${css("--grid")}"></span>non disponible</span></div>`;
-    help.textContent = ind.help + " Cliquez sur une unité pour le détail.";
+    help.textContent = ind.help + " Survolez ou cliquez sur une unité pour le détail.";
+    teardownCompare();
   } else if (mode === "ntl" || mode === "compare") {
-    const y = mode === "compare" ? years[years.length - 1] : years[+$("#map-year").value];
-    $("#year-label").textContent = y || "";
-    if (S.map.getSource("ntl") && y) S.map.getSource("ntl").updateImage({ url: `data/${S.iso}/rasters/${m.rasters.ntl[y]}` });
+    const y = mode === "compare" ? ($("#cmp-b") ? $("#cmp-b").value : years[years.length - 1]) : years[+$("#map-year").value];
+    $("#year-label").textContent = mode === "ntl" ? (y || "") : "";
+    if (S.lyr.ntl && y) S.lyr.ntl.setUrl(rasterUrl(m.rasters.ntl[y]));
     legend.innerHTML = `<strong>Radiance (échelle log.)</strong><div class="ramp" style="background:linear-gradient(90deg,#000004,#3b0f70,#8c2981,#de4968,#fe9f6d,#fcfdbf)"></div><div class="ticks"><span>0,1</span><span>1</span><span>10</span><span>100 nW</span></div>`;
-    help.textContent = mode === "compare" ? `Faites glisser le curseur : à gauche ${years[0]}, à droite ${years[years.length - 1]}. Les zones apparues traduisent l'électrification, l'urbanisation ou de nouvelles infrastructures.`
-      : "Composite annuel VNL V2 (torchères masquées). Déplacez le curseur pour parcourir les années.";
-    if (mode === "compare") setupCompare(years[0]); else teardownCompare();
+    if (mode === "compare") {
+      const a = $("#cmp-a") ? $("#cmp-a").value : years[0];
+      help.textContent = "Cartes synchronisées : {a} à gauche, {b} à droite (changez les années dans la barre d'outils). Les zones apparues traduisent l'électrification, l'urbanisation ou de nouvelles infrastructures.".replace("{a}", a).replace("{b}", y);
+      setupCompare(a);
+    } else { help.textContent = "Composite annuel VNL V2 (torchères masquées). Déplacez le curseur pour parcourir les années."; teardownCompare(); }
   } else if (mode === "dark") {
     legend.innerHTML = `<strong>Zones habitées (${(m.rasters && Object.keys(m.rasters.dark || {})[0]) || ""})</strong><div><span class="sw" style="background:#f5c242"></span>éclairées</div><div><span class="sw" style="background:#d7263d"></span>non éclairées (« dans le noir »)</div>`;
-    help.textContent = "Pixels comptant au moins " + ((m.config || {}).pop_min || 5) + " habitants : en rouge ceux dont la radiance reste sous le seuil de détection. Proxy de l'absence d'accès à l'électricité — un foyer raccordé mais peu éclairé y apparaît aussi.";
+    help.textContent = "Pixels comptant au moins {p} habitants : en rouge ceux dont la radiance reste sous le seuil de détection. Proxy de l'absence d'accès à l'électricité — un foyer raccordé mais peu éclairé y apparaît aussi.".replace("{p}", (m.config || {}).pop_min || 5);
     teardownCompare();
   }
-  if (mode !== "compare") teardownCompare();
 }
 
-async function setupCompare(y0) {
-  const m = S.d.meta;
+function setupCompare(y0) {
+  const m = S.d.meta, wrap = $(".map-wrap");
+  wrap.classList.add("split"); $("#map-b").hidden = false;
   if (!S.mapB) {
-    S.mapB = true;   // guard against double creation while the style loads
-    S.mapB = await newMap("map-b");
-    S.mapB.on("load", () => {
-      const [w, s, e, n] = m.rasters.bounds;
-      S.mapB.addSource("ntl", { type: "image", url: `data/${S.iso}/rasters/${m.rasters.ntl[y0]}`, coordinates: [[w, n], [e, n], [e, s], [w, s]] });
-      S.mapB.addLayer({ id: "ntl", type: "raster", source: "ntl", paint: { "raster-opacity": 0.95 } }, labelsBefore(S.mapB));
-      S.mapB.addSource("ADM1", { type: "geojson", data: S.d.adm1 });
-      S.mapB.addLayer({ id: "l", type: "line", source: "ADM1", paint: { "line-color": "rgba(255,255,255,0.75)", "line-width": 1 } }, labelsBefore(S.mapB));
-      S.mapB.addControl(new maplibregl.AttributionControl({ compact: true }));
-      sync();
-    });
-    S.syncFn = () => sync();
-    S.map.on("move", S.syncFn);
-  }
-  $("#map-b").hidden = false; if (S.mapB.resize) S.mapB.resize(); sync(); clipCompare();
+    S.mapB = newMap("map-b");
+    S.lyrB = { ntl: overlay(m.rasters.ntl[y0]), outline: S.d.adm1 ? outline(S.d.adm1) : null };
+    showLayer(S.mapB, S.lyrB.ntl, true); showLayer(S.mapB, S.lyrB.outline, true);
+    let lock = false;
+    const link = (src, dst) => src.on("move", () => { if (lock) return; lock = true; dst.setView(src.getCenter(), src.getZoom(), { animate: false }); lock = false; });
+    link(S.map, S.mapB); link(S.mapB, S.map);
+  } else if (S.lyrB.ntl) S.lyrB.ntl.setUrl(rasterUrl(m.rasters.ntl[y0]));
+  setTimeout(() => { S.map.invalidateSize(); S.mapB.invalidateSize(); S.mapB.setView(S.map.getCenter(), S.map.getZoom(), { animate: false }); }, 60);
 }
-function sync() { if (S.mapB && S.mapB.jumpTo) S.mapB.jumpTo({ center: S.map.getCenter(), zoom: S.map.getZoom(), bearing: S.map.getBearing(), pitch: S.map.getPitch() }); }
-function clipCompare() { const v = +$("#swipe").value; $("#map-b").style.clipPath = `inset(0 ${100 - v}% 0 0)`; }
-function teardownCompare() { $("#map-b").hidden = true; $("#swipe").hidden = true; }
+function teardownCompare() {
+  const wrap = $(".map-wrap"); if (!wrap.classList.contains("split")) return;
+  wrap.classList.remove("split"); $("#map-b").hidden = true;
+  setTimeout(() => S.map && S.map.invalidateSize(), 60);
+}
 
-function popup(e, lv) {
-  const p = e.features[0].properties;
-  const rows = [["Somme des lumières", F.num(p.sol)], ["Part nationale", F.share(p.share_last, 1)], ["Croissance", F.pct(p.growth) + "/an"],
-    ["Classe", p.class || "–"], ["Lumière/hab.", F.num(p.sol_pc, 3)], ["Pop. dans le noir", `${F.people(p.pop_dark)} (${F.share(p.dark_share)})`]];
+function popup(p, lv, latlng) {
+  const rows = [["Somme des lumières", F.num(p.sol)], ["Part nationale", F.share(p.share_last, 1)], ["Croissance", F.pct(p.growth) + "/an"], ["Classe", p.class || "–"], ["Lumière/hab.", F.num(p.sol_pc, 3)], ["Pop. dans le noir", `${F.people(p.pop_dark)} (${F.share(p.dark_share)})`]];
   if (lv === "ADM1" && isNum(p.gdp_pc_est)) rows.push(["PIB/hab. estimé", F.num(p.gdp_pc_est) + " USD"]);
-  if (S.popup) S.popup.remove();
-  S.popup = new maplibregl.Popup({ maxWidth: "280px" }).setLngLat(e.lngLat).setHTML(`<strong>${esc(p.name)}</strong>${p.parent_name ? `<div class="why">${esc(p.parent_name)}</div>` : ""}` +
-    `<table>${rows.map(([a, b]) => `<tr><td style="color:var(--ink-2);padding-right:8px">${a}</td><td>${b}</td></tr>`).join("")}</table>`).addTo(S.map);
+  L.popup({ maxWidth: 300 }).setLatLng(latlng).setContent(`<strong>${esc(p.name)}</strong>${p.parent_name ? `<div class="why">${esc(p.parent_name)}</div>` : ""}` +
+    `<table>${rows.map(([a, b]) => `<tr><td style="color:var(--ink-2);padding-right:8px">${a}</td><td>${b}</td></tr>`).join("")}</table>`).openOn(S.map);
 }
 
 /* ================================================================ theme & boot */
@@ -608,28 +600,27 @@ function toggleTheme() {
 function rethemed() {
   const cur = (location.hash || "#overview").slice(1);
   S.rendered = { map: S.rendered.map }; route();   // the map is re-themed in place, never rebuilt
-  for (const mp of [S.map, S.mapB]) {
-    if (!mp || !mp.setStyle) continue;
-    baseStyle(effTheme()).then((next) => mp.setStyle(next, { transformStyle: (prev, nxt) => {
-      if (!prev) return nxt;
-      const custom = prev.layers.filter((l) => !(l.metadata && l.metadata.base));
-      const sources = { ...nxt.sources };
-      for (const [k, v] of Object.entries(prev.sources)) if (!(k in sources) && custom.some((l) => l.source === k)) sources[k] = v;
-      const layers = [...nxt.layers]; const i = layers.findIndex((l) => l.type === "symbol");
-      layers.splice(i < 0 ? layers.length : i, 0, ...custom);
-      return { ...nxt, sources, layers };
-    } }));
-  }
+  for (const mp of [S.map, S.mapB]) if (mp && mp._base) mp._base.setUrl(TILES[effTheme()]);
   if (cur === "map") applyMapMode();
 }
 
+
+/* ---- FR / EN switch: the other language lives in "<lang>/" (or "../" from inside it) */
+function langSwitch() {
+  const a = $("#lang-switch"); if (!a) return;
+  const me = document.documentElement.lang, other = me === "fr" ? "en" : "fr";
+  const inSub = new RegExp("/" + me + "/(index\\.html)?$").test(location.pathname);
+  const upd = () => { a.href = (inSub ? "../" : other + "/") + location.search + location.hash; };
+  upd(); window.addEventListener("hashchange", upd);
+}
 async function boot() {
+  langSwitch();
   $("#theme-toggle").onclick = toggleTheme;
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (!document.documentElement.dataset.theme) rethemed(); });
   let countries = [];
   try { countries = await getJSON("data/countries.json"); } catch (e) { /* handled below */ }
   if (!countries.length) { $("#country-title").textContent = "Aucune donnée publiée"; $("#lede").textContent = "Exécutez la section 11 du notebook pour exporter les données."; return; }
-  const want = new URLSearchParams(location.search).get("pays") || store.get("ntl-country");
+  const want = (new URLSearchParams(location.search).get("country") || new URLSearchParams(location.search).get("pays")) || store.get("ntl-country");
   const iso = (countries.find((c) => c.iso3 === want) || countries[0]).iso3;
   const sel = $("#country-select");
   if (countries.length > 1) {

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lumières nocturnes et activité économique</title>
 <meta name="description" content="Tableau de bord : l'activité économique mesurée par les lumières nocturnes (VIIRS), aux niveaux national et régional.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1b2a'/%3E%3Ccircle cx='11' cy='13' r='3' fill='%23f5c242'/%3E%3Ccircle cx='21' cy='19' r='2' fill='%23f5c242'/%3E%3Ccircle cx='19' cy='9' r='1.4' fill='%23fde7a6'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300553A'/%3E%3Ccircle cx='11' cy='13' r='3' fill='%23f5c242'/%3E%3Ccircle cx='21' cy='19' r='2' fill='%23f5c242'/%3E%3Ccircle cx='19' cy='9' r='1.4' fill='%23fde7a6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/vendor/leaflet.css">
 <link rel="stylesheet" href="assets/style.css">
 <script>
   // apply the stored theme before first paint (no flash)
@@ -17,13 +17,15 @@
 <a class="skip" href="#main">Aller au contenu</a>
 <header class="topbar">
   <div class="brand">
-    <span class="logo" aria-hidden="true"></span>
+    <img id="flag" class="flag" alt="Drapeau" hidden>
     <div>
-      <div class="eyebrow">Lumières nocturnes · activité économique</div>
+      <div class="eyebrow">Banque africaine de développement · Lumières nocturnes et activité économique</div>
       <h1 id="country-title">Chargement…</h1>
     </div>
   </div>
   <div class="controls">
+    <span class="cobrand">BAD × FMI · Centre Big Data</span>
+    <a id="lang-switch" class="lang-btn" href="#" title="English version" hreflang="en">EN</a>
     <label class="sr" for="country-select">Pays</label>
     <select id="country-select" hidden></select>
     <button id="theme-toggle" class="icon-btn" type="button" aria-label="Changer de thème" title="Thème clair / sombre">
@@ -84,11 +86,12 @@
           <select id="map-indicator"></select></label>
         <label class="ctl" data-for="ntl">Année <span id="year-label" class="mono"></span>
           <input type="range" id="map-year" min="0" max="0" step="1"></label>
+        <label class="ctl" data-for="compare">Gauche <select id="cmp-a"></select></label>
+        <label class="ctl" data-for="compare">Droite <select id="cmp-b"></select></label>
       </div>
       <div class="map-wrap">
         <div id="map" class="map" role="region" aria-label="Carte interactive"></div>
         <div id="map-b" class="map map-b" hidden aria-hidden="true"></div>
-        <input type="range" id="swipe" class="swipe" min="0" max="100" value="50" hidden aria-label="Curseur avant / après">
         <div class="map-legend" id="map-legend"></div>
         <div class="map-fallback" id="map-fallback" hidden>La carte n'a pas pu être chargée (bibliothèque cartographique
           inaccessible). Les tableaux des autres pages restent disponibles.</div>
@@ -259,8 +262,10 @@
   <p id="foot"></p>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8"></script>
-<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="assets/vendor/leaflet.js"></script>
+<script>window.L || document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>')</script>
+<script src="assets/vendor/plotly.min.js" charset="utf-8"></script>
+<script>window.Plotly || document.write('<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" charset="utf-8"><\/script>')</script>
 <script src="assets/app.js"></script>
 </body>
 </html>

@@ -167,3 +167,39 @@ table.data tr:hover td { background: var(--surface-2); }
   .swipe { width: 80%; margin: 0 10%; }
 }
 @media (forced-colors: active) { .badge::before { forced-color-adjust: none; } }
+
+/* ---- Leaflet map (replaces MapLibre) */
+.map-wrap .leaflet-container { background: var(--surface-2); font: inherit; }
+.map-legend { z-index: 1001; }
+.map-fallback { z-index: 1002; background: var(--surface-2); }
+.map-wrap.split > .map { width: calc(50% - 3px); }
+.map-wrap.split > #map-b { left: auto; right: 0; pointer-events: auto; }
+.map-wrap.split::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 3px); width: 6px; background: var(--surface); z-index: 900; }
+.leaflet-popup-content table { border-collapse: collapse; font-size: 13px; }
+.leaflet-tooltip { font: 600 12px/1.3 inherit; }
+
+/* ==== AfDB visual identity (green / gold), co-branded with the IMF Big Data Center ======== */
+:root { --afdb: #00704A; --afdb-dark: #00553A; --afdb-light: #00A86A; --afdb-gold: #F5C242; --imf: #3F7FC7;
+  --night: #00553A; --accent: #00704A; --s1: #00704A; --s3: #3F7FC7; }
+:root[data-theme="dark"] { --accent: #F5C242; --s1: #00A86A; }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) { --accent: #F5C242; --s1: #00A86A; } }
+body { --font: "Segoe UI", Calibri, system-ui, -apple-system, Roboto, sans-serif; font-family: var(--font); }
+.topbar { background: linear-gradient(120deg, #003d2a 0%, var(--afdb-dark) 45%, var(--afdb) 100%);
+  border-bottom: 4px solid var(--afdb-gold); padding-top: 16px; padding-bottom: 16px; }
+.eyebrow { color: var(--afdb-gold); font-weight: 700; letter-spacing: .1em; }
+.brand h1 { font-weight: 800; letter-spacing: .01em; }
+.flag { flex: none; width: 54px; height: 38px; object-fit: cover; border-radius: 6px;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.85), 0 2px 8px rgba(0,0,0,.35); background: #fff; }
+.cobrand { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: .72rem;
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #fff; background: rgba(63,127,199,.9);
+  border: 1px solid rgba(255,255,255,.45); white-space: nowrap; }
+.lang-btn { display: grid; place-items: center; min-width: 44px; height: 36px; padding: 0 10px; border-radius: 9px;
+  border: 1px solid var(--afdb-gold); color: var(--afdb-gold); font-weight: 800; text-decoration: none; letter-spacing: .05em; }
+.lang-btn:hover { background: var(--afdb-gold); color: var(--afdb-dark); }
+.controls select { background: #003d2a; }
+.tabs a[aria-current="page"] { color: var(--afdb); border-bottom-color: var(--afdb-gold) !important; font-weight: 700; }
+:root[data-theme="dark"] .tabs a[aria-current="page"] { color: var(--afdb-gold); }
+.kpi, .kpis > * { border-top: 3px solid var(--afdb); }
+.seg button.on { background: var(--afdb) !important; color: #fff !important; border-color: var(--afdb) !important; }
+a { color: var(--s1); }
+@media (max-width: 760px) { .cobrand { display: none; } .flag { width: 42px; height: 30px; } }
